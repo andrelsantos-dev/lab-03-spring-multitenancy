@@ -28,3 +28,6 @@ psql: ## Connect to PostgreSQL.
 
 status: ## Show container status.
 	docker compose ps
+
+run: ## Running Spring Boot
+	./mvnw spring-boot:run
