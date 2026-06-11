@@ -22,17 +22,16 @@ Build a Spring Boot application that propagates tenant context and relies on Pos
 
 ## Learning Path
 
-|Phase|Topic|
-|---|---|
+| Phase      |Topic|
+|------------|---|
 | ✅ Phase 01 | Bootstrap |
-| Phase 02 | Tenant Context |
-| Phase 03 | HTTP Tenant Filter |
-| Phase 04 | Database Connectivity |
-| Phase 05 | Session Variables |
-| Phase 06 | Tenant-Aware Data Access |
-| Phase 07 | RLS Integration |
-| Phase 08 | Integration Tests |
-| Phase 09 | Production Considerations |
+| ✅ Phase 02 | Tenant Context Propagation |
+| ✅ Phase 03   | Database Connectivity |
+| Phase 04   | Session Variables |
+| Phase 05   | Tenant-Aware Data Access |
+| Phase 06   | RLS Integration |
+| Phase 07   | Integration Tests |
+| Phase 08   | Production Considerations |
 
 ## Prerequisites
 
