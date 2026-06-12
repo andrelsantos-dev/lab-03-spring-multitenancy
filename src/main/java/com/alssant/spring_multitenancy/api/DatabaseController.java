@@ -1,14 +1,15 @@
 package com.alssant.spring_multitenancy.api;
 
 import com.alssant.spring_multitenancy.tenant.TenantContext;
+import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.http.ResponseEntity;
+import org.springframework.jdbc.core.DataClassRowMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/database")
@@ -98,5 +99,41 @@ public class DatabaseController {
         );
 
         return ResponseEntity.ok("Tenant reset");
+    }
+
+    @GetMapping("/tenants")
+    public ResponseEntity<List<TenantResponse>> getTenants() {
+        List<TenantResponse> tenants = jdbcTemplate.query(
+                "SELECT id, name FROM tenants",
+                new DataClassRowMapper<>(TenantResponse.class)
+        );
+
+        return ResponseEntity.ok(tenants);
+    }
+
+    @GetMapping("/tenants/{id}")
+    public ResponseEntity<TenantResponse> getTenant(@PathVariable UUID id) {
+        try{
+            TenantResponse tenant = jdbcTemplate.queryForObject(
+                    "SELECT id, name FROM tenants where id = ?",
+                    new DataClassRowMapper<>(TenantResponse.class),
+                    id
+            );
+            return ResponseEntity.ok(tenant);
+        }catch (EmptyResultDataAccessException ex){
+            return ResponseEntity
+                    .notFound()
+                    .build();
+        }
+    }
+
+    @GetMapping("/patients")
+    public ResponseEntity<List<PatientResponse>> getPatients() {
+        List<PatientResponse> tenants = jdbcTemplate.query(
+                "SELECT id, tenant_id, name FROM patients",
+                new DataClassRowMapper<>(PatientResponse.class)
+        );
+
+        return ResponseEntity.ok(tenants);
     }
 }

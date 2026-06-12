@@ -28,7 +28,7 @@ Build a Spring Boot application that propagates tenant context and relies on Pos
 | ✅ Phase 02 | Tenant Context Propagation |
 | ✅ Phase 03   | Database Connectivity |
 | ✅ Phase 04   | Session Variables |
-| Phase 05   | Tenant-Aware Data Access |
+| ✅ Phase 05   | Tenant-Aware Data Access |
 | Phase 06   | RLS Integration |
 | Phase 07   | Integration Tests |
 | Phase 08   | Production Considerations |
