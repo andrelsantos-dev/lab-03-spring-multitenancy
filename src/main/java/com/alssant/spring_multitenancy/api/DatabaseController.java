@@ -68,8 +68,13 @@ public class DatabaseController {
 
         String tenantId = TenantContext.getTenantId();
 
-        if (tenantId == null) {
-            tenantId = "NOT_DEFINED";
+        if (tenantId == null || tenantId.isBlank()) {
+            return ResponseEntity
+                    .badRequest()
+                    .body(Map.of(
+                            "error",
+                            "Tenant header is required"
+                    ));
         }
 
         // SELECT set_config('app.current_tenant', ?, false) is a way to protect against sql injection so we change the SET app.current_tenant = ..

@@ -5,10 +5,13 @@ spring:
     name: spring-multitenancy
   datasource:
     url: jdbc:postgresql://localhost:5432/rls_lab
-    username: migration_user
-    password: migration_password
-
+    username: app_user
+    password: app_password
   flyway:
     enabled: true
+    url: jdbc:postgresql://localhost:5432/rls_lab
+    user: migration_user
+    password: migration_password
+
 
 
