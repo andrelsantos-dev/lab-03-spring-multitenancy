@@ -127,7 +127,7 @@ class TenantRlsIntegrationTest extends BaseIntegrationTest {
 
 
     @Test
-    void shouldIsolateByTenant() throws Exception {
+    void shouldNotLeakTenantBetweenRequests() throws Exception {
         String hospitalAId = tenantFixture.hospitalA();
         String hospitalXId = UUID.randomUUID().toString();
 
@@ -148,5 +148,27 @@ class TenantRlsIntegrationTest extends BaseIntegrationTest {
                 )
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(0));
+    }
+
+    @Test
+    void shouldClearTenantBetweenRequests()
+            throws Exception {
+
+        mockMvc.perform(
+                        get("/database/patients")
+                                .header(
+                                        "X-Tenant-Id",
+                                        tenantFixture.hospitalA()
+                                )
+                )
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1));
+
+        mockMvc.perform(
+                        get("/database/patients")
+                )
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+
     }
 }

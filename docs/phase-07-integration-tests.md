@@ -471,6 +471,78 @@ Main discoveries:
 
 Root cause analysis was performed layer by layer.
 
+### RLS Policies Must Handle Missing Tenant Context
+
+During integration testing, unexpected behavior was discovered when validating tenant isolation across multiple sequential HTTP requests.
+
+#### The Scenario
+* **Request 1:** `X-Tenant-Id: hospital-a-uuid` → Successfully returns `[Alice]`.
+* **Request 2:** No tenant header provided → Expected: `[]` (Empty list).
+
+**Actual Result:**
+```text
+org.postgresql.util.PSQLException: ERROR: invalid input syntax for type uuid: ""
+
+```
+
+#### Root Cause Analysis
+
+The issue was **not** caused by a `ThreadLocal` memory leak. The application correctly executed `TenantContext.clear()`, and the database pool executed:
+
+```sql
+-- or RESET app.current_tenant
+SET app.current_tenant = '';
+```
+
+However, the original PostgreSQL RLS policy performed a direct string-to-UUID conversion:
+
+```sql
+current_setting('app.current_tenant', true)::uuid
+```
+
+When the session variable was cleared (becoming an empty string `''`), PostgreSQL attempted to execute `''::uuid`, which is syntactically invalid for the `UUID` data type, throwing a `500 Internal Server Error`.
+
+#### Solution
+
+All Row-Level Security (RLS) policies were updated to safely tolerate empty or missing tenant contexts using `NULLIF`.
+
+**Before:**
+
+```sql
+USING 
+    (tenant_id = current_setting('app.current_tenant', true)::uuid)
+WITH CHECK 
+    (tenant_id = current_setting('app.current_tenant', true)::uuid);
+
+```
+
+**After:**
+
+```sql
+USING 
+    (tenant_id = 
+            NULLIF(current_setting('app.current_tenant', true), '')::uuid)
+WITH CHECK 
+    (tenant_id = 
+            NULLIF(current_setting('app.current_tenant', true), '')::uuid);
+
+```
+
+### Why This Works (Execution Flow)
+
+* **Old Broken Flow:** `''` (Empty) → `::uuid` (Cast) → **`PSQLException (Invalid Syntax)`**
+* **New Resilient Flow:** `''` (Empty) → `NULLIF('', '')` → `NULL` → `NULL::uuid` (Valid) → `tenant_id = NULL` → **`Safe Empty Result []`**
+
+### Architectural Lesson
+
+Database-level security policies must be defensive and should never assume the application state is always present or perfectly populated.
+
+A missing or cleared tenant context must fail closed (**no access / empty result**), never open, and should not crash the database engine with an unhandled exception. This improvement makes our RLS implementation resilient against:
+
+* Missing or malformed HTTP headers.
+* Cleared `ThreadLocal` contexts in async threads.
+* Recycled or dirty pooled database connections.
+
 ---
 
 ## Key Learnings
@@ -482,6 +554,7 @@ Root cause analysis was performed layer by layer.
 * `@ServiceConnection` is useful but not universal
 * `@DynamicPropertySource` provides explicit configuration control
 * `SELECT current_user` is a simple way to validate active credentials
+* RLS policies should tolerate missing tenant context and fail closed
 
 ---
 
