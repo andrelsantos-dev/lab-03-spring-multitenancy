@@ -1,6 +1,6 @@
 package com.alssant.spring_multitenancy.integration;
 
-import com.alssant.spring_multitenancy.api.PatientResponse;
+import com.alssant.spring_multitenancy.api.dto.PatientResponse;
 import com.alssant.spring_multitenancy.support.BaseIntegrationTest;
 import com.alssant.spring_multitenancy.support.TenantFixture;
 import com.alssant.spring_multitenancy.tenant.TenantContext;

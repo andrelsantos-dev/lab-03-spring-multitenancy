@@ -1,4 +1,4 @@
-package com.alssant.spring_multitenancy.api;
+package com.alssant.spring_multitenancy.api.dto;
 
 import java.util.UUID;
 

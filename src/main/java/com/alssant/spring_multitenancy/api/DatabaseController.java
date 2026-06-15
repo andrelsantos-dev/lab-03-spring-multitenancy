@@ -1,5 +1,8 @@
 package com.alssant.spring_multitenancy.api;
 
+import com.alssant.spring_multitenancy.api.dto.PatientResponse;
+import com.alssant.spring_multitenancy.api.dto.TenantResponse;
+import com.alssant.spring_multitenancy.patient.PatientService;
 import com.alssant.spring_multitenancy.tenant.TenantContext;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.http.ResponseEntity;
@@ -15,9 +18,11 @@ import java.util.UUID;
 @RequestMapping("/database")
 public class DatabaseController {
     private final JdbcTemplate jdbcTemplate;
+    private final PatientService patientService;
 
-    public DatabaseController(JdbcTemplate jdbcTemplate) {
+    public DatabaseController(JdbcTemplate jdbcTemplate, PatientService patientService) {
         this.jdbcTemplate = jdbcTemplate;
+        this.patientService = patientService;
     }
 
     /*
@@ -134,11 +139,6 @@ public class DatabaseController {
 
     @GetMapping("/patients")
     public ResponseEntity<List<PatientResponse>> getPatients() {
-        List<PatientResponse> tenants = jdbcTemplate.query(
-                "SELECT id, tenant_id, name FROM patients",
-                new DataClassRowMapper<>(PatientResponse.class)
-        );
-
-        return ResponseEntity.ok(tenants);
+        return ResponseEntity.ok(patientService.findAll());
     }
 }
