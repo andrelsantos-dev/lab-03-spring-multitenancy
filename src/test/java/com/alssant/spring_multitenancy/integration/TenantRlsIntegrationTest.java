@@ -1,58 +1,152 @@
 package com.alssant.spring_multitenancy.integration;
 
+import com.alssant.spring_multitenancy.api.PatientResponse;
+import com.alssant.spring_multitenancy.support.BaseIntegrationTest;
+import com.alssant.spring_multitenancy.support.TenantFixture;
+import com.alssant.spring_multitenancy.tenant.TenantContext;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
-import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.jdbc.core.DataClassRowMapper;
+import org.springframework.test.web.servlet.MockMvc;
+
+import java.util.List;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@SpringBootTest
-@Testcontainers
-class TenantRlsIntegrationTest {
-    private static final String APP_USER = "app_user";
-    private static final String MIGRATION_USER = "migration_user";
-
-    @Container
-    @SuppressWarnings("resource")//managed by testcontainers
-    static final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:17")
-            .withDatabaseName("dbRLSTest")
-            .withInitScript("db/init/00-test-init.sql");
-
+@AutoConfigureMockMvc
+class TenantRlsIntegrationTest extends BaseIntegrationTest {
     @Autowired
-    JdbcTemplate jdbcTemplate;
+    TenantFixture tenantFixture;
+    @Autowired
+    MockMvc mockMvc;
 
-    @DynamicPropertySource
-    static void configureProperties(DynamicPropertyRegistry registry) {
-        String jdbcUrl = postgres.getJdbcUrl();
-
-        registry.add("spring.flyway.url", () -> jdbcUrl);
-        registry.add("spring.flyway.user", () -> MIGRATION_USER);
-        registry.add("spring.flyway.password", () -> "migration_password");
-
-        registry.add("spring.datasource.url", () -> jdbcUrl);
-        registry.add("spring.datasource.username", () -> APP_USER);
-        registry.add("spring.datasource.password", () -> "app_password");
+    @AfterEach
+    void clearTenantContext() {
+        TenantContext.clear();
     }
 
     @Test
-    void shouldConnectToPostgres() {
-        assertTrue(postgres.isRunning());
-    }
-
-
-    @Test
-    void readCurrentUser() {
+    void shouldConnectAsAppUser() {
         String currentUser = jdbcTemplate.queryForObject(
                 "select current_user",
                 String.class
         );
 
         assertEquals(APP_USER,currentUser);
+    }
+
+    @Test
+    void shouldExposeTenantAsDatabaseSessionVariable(){
+        String tenantId = UUID.randomUUID().toString();
+        TenantContext.setTenantId(tenantId);
+
+        String currentUser =
+        jdbcTemplate.queryForObject(
+                """
+                        SELECT current_setting(
+                            'app.current_tenant',
+                            true
+                        )
+                        """,
+                String.class
+        );
+
+        assertEquals(tenantId,currentUser);
+
+    }
+
+    @Test
+    void shouldReturnOnlyPatientsFromHospitalA(){
+        String tenantId = tenantFixture.hospitalA();
+        TenantContext.setTenantId(tenantId);
+
+        List<PatientResponse> patients = jdbcTemplate.query(
+                "SELECT id, tenant_id, name FROM patients",
+                new DataClassRowMapper<>(PatientResponse.class)
+        );
+
+        assertEquals(1,patients.size());
+        assertEquals("Alice",patients.getFirst().name());
+    }
+
+    @Test
+    void shouldReturnOnlyPatientsFromHospitalB(){
+        String tenantId = tenantFixture.hospitalB();
+        TenantContext.setTenantId(tenantId);
+
+        List<PatientResponse> patients = jdbcTemplate.query(
+                "SELECT id, tenant_id, name FROM patients",
+                new DataClassRowMapper<>(PatientResponse.class)
+        );
+
+        assertEquals(1,patients.size());
+        assertEquals("Bob",patients.getFirst().name());
+    }
+
+    @Test
+    void shouldReturnEmptyWhenTenantHasNoPatients(){
+        String tenantId = UUID.randomUUID().toString();
+        TenantContext.setTenantId(tenantId);
+
+        List<PatientResponse> patients = jdbcTemplate.query(
+                "SELECT id, tenant_id, name FROM patients",
+                new DataClassRowMapper<>(PatientResponse.class)
+        );
+
+        assertTrue(patients.isEmpty());
+    }
+
+    @Test
+    void shouldFilterPatientsByHeader()
+            throws Exception {
+
+        mockMvc.perform(
+                        get("/database/patients")
+                                .header(
+                                        "X-Tenant-Id",
+                                        tenantFixture.hospitalA()
+                                )
+                )
+                .andExpect(
+                        status().isOk()
+                )
+                .andExpect(
+                        jsonPath(
+                                "$.length()"
+                        )
+                                .value(1)
+                );
+
+    }
+
+
+    @Test
+    void shouldIsolateByTenant() throws Exception {
+        String hospitalAId = tenantFixture.hospitalA();
+        String hospitalXId = UUID.randomUUID().toString();
+
+        mockMvc.perform(
+                        get("/database/patients")
+                                .header("X-Tenant-Id", hospitalAId)
+                )
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].name").value("Alice"))
+                .andExpect(jsonPath("$[0].tenantId").value(hospitalAId))
+                .andExpect(jsonPath("$[0].id").exists());
+
+
+        mockMvc.perform(
+                        get("/database/patients")
+                                .header("X-Tenant-Id", hospitalXId)
+                )
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
     }
 }

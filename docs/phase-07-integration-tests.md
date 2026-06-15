@@ -2,15 +2,15 @@
 
 ## Objective
 
-Validate application behavior in an isolated environment using Testcontainers, ensuring that:
+Validate application behavior in an isolated environment using Spring Boot, Testcontainers and PostgreSQL RLS, ensuring that:
 
 * Spring Boot starts correctly
 * Flyway migrations execute automatically
-* PostgreSQL roles are created during bootstrap
-* Runtime uses a restricted database user
-* Tests do not depend on a local PostgreSQL instance
-
-This phase introduces integration tests while preserving the separation between infrastructure, migrations and runtime permissions.
+* PostgreSQL roles are initialized correctly
+* Runtime executes with restricted permissions
+* Tenant context propagates correctly
+* PostgreSQL RLS enforces data isolation
+* Tests do not depend on local infrastructure
 
 ---
 
@@ -61,6 +61,46 @@ Testcontainers transitive vulnerabilities were intentionally not overridden beca
 
 ---
 
+## Test Infrastructure
+
+A reusable integration base was introduced.
+
+```mermaid
+graph TD
+    %% Node Declarations
+    Node_Base["BaseIntegrationTest"]
+    Node_Tenant["TenantRlsIntegrationTest"]
+
+    %% Relationships
+    Node_Base -->|Inherits Infrastructure / Extends| Node_Tenant
+
+    %% Styling
+    style Node_Base fill:#bbf,stroke:#333,stroke-width:2px
+    style Node_Tenant fill:#99ff99,stroke:#333,stroke-width:2px
+```
+
+Responsibilities:
+
+### BaseIntegrationTest
+
+Provides:
+
+* PostgreSQL Testcontainer
+* Spring Boot integration
+* datasource override
+* Flyway configuration
+
+### TenantRlsIntegrationTest
+
+Validates:
+
+* runtime permissions
+* session variables
+* RLS filtering
+* HTTP integration
+
+---
+
 ## Initializing PostgreSQL for Tests
 
 Container bootstrap:
@@ -68,7 +108,7 @@ Container bootstrap:
 ```java
 @SpringBootTest
 @Testcontainers
-class TenantRlsIntegrationTest {
+abstract class BaseIntegrationTest {
 
     @Container
     static final PostgreSQLContainer<?> postgres =
@@ -81,13 +121,13 @@ class TenantRlsIntegrationTest {
 }
 ```
 
-The initialization script runs before Spring Boot starts.
+The initialization script executes before Spring starts.
 
 Responsibilities:
 
-* enable required extensions
-* create runtime roles
-* prepare migration permissions
+* create database roles
+* enable extensions
+* configure migration access
 
 ---
 
@@ -116,19 +156,9 @@ This guarantees that tests never connect to localhost.
 
 ---
 
-## Why @ServiceConnection Was Not Used
+## Database Role Separation
 
-Spring Boot provides:
-
-```java
-@ServiceConnection
-```
-
-This feature simplifies container integration.
-
-However, this lab intentionally separates database responsibilities.
-
-Database roles:
+Three users participate in execution.
 
 ```mermaid
 graph TD
@@ -161,6 +191,22 @@ graph TD
     style Node_App fill:#bbf,stroke:#333,stroke-width:2px
 ```
 
+This separation simulates production responsibilities.
+
+---
+
+## Why @ServiceConnection Was Not Used
+
+Spring Boot provides:
+
+```java
+@ServiceConnection
+```
+
+This feature simplifies container integration.
+
+However, this lab intentionally separates database responsibilities.
+
 Using `@ServiceConnection` caused datasource credentials to be overridden.
 
 Result:
@@ -176,39 +222,6 @@ runtime → app_user
 ```
 
 For this architecture, `@DynamicPropertySource` provided explicit control.
-
----
-
-## Unexpected Failure During Implementation
-
-Tests kept connecting to:
-
-```text
-localhost:5432
-```
-
-Root cause was not Flyway.
-
-Spring was executing an additional default test:
-
-```java
-@SpringBootTest
-class SpringMultitenancyApplicationTests {
-
-    @Test
-    void contextLoads() {
-    }
-
-}
-```
-
-This class loaded the original application configuration and ignored Testcontainers.
-
-Removing or adapting that class solved the issue.
-
-Lesson:
-
-Multiple `@SpringBootTest` classes may initialize independent application contexts.
 
 ---
 
@@ -248,6 +261,218 @@ This confirms that:
 
 ---
 
+## Tenant Context Propagation
+
+The application must propagate tenant information from request execution to PostgreSQL.
+
+Flow:
+
+```mermaid
+graph TD
+    %% Node Declarations
+    Node_Req["Request"]
+    Node_Filter["Tenant Filter"]
+    Node_Ctx["TenantContext (ThreadLocal)"]
+    Node_DS["TenantAwareDataSource"]
+    Node_Session["Database Session"]
+    Node_RLS["PostgreSQL RLS"]
+
+    %% Relationships
+    Node_Req -->|1. Incoming HTTP| Node_Filter
+    Node_Filter -->|2. Extract & Set| Node_Ctx
+    Node_Ctx -->|3. Read Context| Node_DS
+    Node_DS -->|4. SET LOCAL app.current_tenant| Node_Session
+    Node_Session -->|5. Evaluate Policy| Node_RLS
+
+    %% Styling
+    style Node_Req fill:#f9f,stroke:#333,stroke-width:2px
+    style Node_Filter fill:#f96,stroke:#333,stroke-width:2px
+    style Node_Ctx fill:#bbf,stroke:#333,stroke-width:2px
+    style Node_DS fill:#ff9999,stroke:#333,stroke-width:2px
+    style Node_Session fill:#ffff99,stroke:#333,stroke-width:2px
+    style Node_RLS fill:#99ff99,stroke:#333,stroke-width:2px
+```
+
+The datasource applies:
+
+```sql
+SET app.current_tenant = '<tenant-id>'
+```
+
+before executing queries.
+
+---
+
+## Why Tenant Is Applied Per Connection
+
+Initial idea:
+
+```text
+Before every SELECT
+Before every UPDATE
+Before every DELETE
+```
+
+This was rejected.
+
+Transactions may execute multiple operations using the same connection.
+
+Final approach:
+
+```mermaid
+graph TD
+    %% Node Declarations
+    Node_Acquire["Acquire Connection"]
+    Node_Apply["Apply Tenant Once"]
+    Node_Execute["Execute Operations"]
+    Node_Return["Return Connection"]
+
+    %% Relationships
+    Node_Acquire -->|1. Pull from Pool| Node_Apply
+    Node_Apply -->|2. SET LOCAL session_var| Node_Execute
+    Node_Execute -->|3. Run Queries / RLS| Node_Return
+
+    %% Styling
+    style Node_Acquire fill:#bbf,stroke:#333,stroke-width:2px
+    style Node_Apply fill:#f96,stroke:#333,stroke-width:2px
+    style Node_Execute fill:#99ff99,stroke:#333,stroke-width:2px
+    style Node_Return fill:#ff9999,stroke:#333,stroke-width:2px
+```
+
+---
+
+## ThreadLocal Lifecycle
+
+Tenant values must not leak.
+
+Important rule:
+
+```text
+ThreadLocal.remove()
+```
+
+clears only the current thread.
+
+Connection reuse remains the real risk.
+
+Cleanup is executed after tests.
+
+Example:
+
+```java
+@AfterEach
+void clearTenant() {
+    TenantContext.clear();
+}
+```
+
+---
+
+## Tenant Fixture
+
+Tenant IDs are generated dynamically.
+
+To avoid hardcoded values, `TenantFixture` was introduced.
+
+Example:
+
+```java
+tenantFixture.hospitalA();
+tenantFixture.hospitalB();
+```
+
+Responsibilities:
+
+* discover tenant IDs
+* cache values
+* simplify test readability
+
+---
+
+## Integration Coverage
+
+Validated scenarios:
+
+### Database Connectivity
+
+```text
+Application connects as app_user
+```
+
+### Session Variables
+
+```sql
+-- TenantContext propagates to:
+SELECT current_setting('app.current_tenant');
+```
+
+### RLS Filtering
+
+```text
+Hospital A → Alice
+
+Hospital B → Bob
+
+Unknown Tenant → Empty Result
+```
+
+### HTTP Integration
+
+Using MockMvc:
+
+```mermaid
+graph TD
+    %% Node Declarations
+    Node_Header["HTTP Header"]
+    Node_Filter["Spring Filter"]
+    Node_Ctx["TenantContext"]
+    Node_DS["Datasource"]
+    Node_PG["PostgreSQL"]
+    Node_JSON["JSON Response"]
+
+    %% Relationships
+    Node_Header -->|1. Transmits Tenant ID| Node_Filter
+    Node_Filter -->|2. Intercepts & Extracts| Node_Ctx
+    Node_Ctx -->|3. Propagates Context| Node_DS
+    Node_DS -->|4. Configures Session & Queries| Node_PG
+    Node_PG -->|5. Returns Isolated Data| Node_JSON
+
+    %% Styling
+    style Node_Header fill:#f9f,stroke:#333,stroke-width:2px
+    style Node_Filter fill:#f96,stroke:#333,stroke-width:2px
+    style Node_Ctx fill:#bbf,stroke:#333,stroke-width:2px
+    style Node_DS fill:#ff9999,stroke:#333,stroke-width:2px
+    style Node_PG fill:#99ff99,stroke:#333,stroke-width:2px
+    style Node_JSON fill:#99bbf,stroke:#333,stroke-width:2px
+```
+
+Example:
+
+```text
+Hospital A
+→ returns Alice
+
+Unknown Tenant
+→ returns []
+```
+
+---
+
+## Unexpected Issues During Implementation
+
+Main discoveries:
+
+* duplicate `@SpringBootTest`
+* datasource override conflicts
+* `@ServiceConnection` limitations
+* role initialization order
+* ResultSet cursor misuse
+* localhost configuration leakage
+
+Root cause analysis was performed layer by layer.
+
+---
+
 ## Key Learnings
 
 * Integration tests should not depend on localhost
@@ -262,29 +487,47 @@ This confirms that:
 
 ## Final Result
 
-Integration tests now execute using:
+Integration tests now validate:
 
 ```mermaid
 graph TD
-    %% Node Declarations
-    Node_TC["Testcontainers"]
-    Node_PG["PostgreSQL"]
-    Node_Fly["Flyway"]
+%% Node Declarations
     Node_SB["Spring Boot"]
-    Node_User["Restricted Runtime User"]
+    Node_TC["Testcontainers"]
+    Node_Fly["Flyway Migrations"]
+    Node_DS["Spring Datasource"]
+    Node_Ctx["Tenant Context"]
+    Node_Session["PostgreSQL Session"]
+    Node_RLS["PostgreSQL RLS"]
+    Node_HTTP["HTTP Response"]
 
-    %% Relationships
-    Node_TC -->|1. Spins Up| Node_PG
-    Node_PG -->|2. Runs Migrations| Node_Fly
-    Node_Fly -->|3. Hands Over To| Node_SB
-    Node_SB -->|4. Enforces RLS via| Node_User
+%% Relationships
+    Node_SB -->|1. Starts Suite & Context| Node_TC
+    Node_TC -->|2. Provisions Postgres Container| Node_Fly
+    Node_Fly -->|3. Executes DDL as migration_user| Node_DS
+    Node_DS -->|4. Obtains Connection as app_user| Node_Ctx
+    Node_Ctx -->|5. Binds Tenant ID to ThreadLocal| Node_Session
+    Node_Session -->|6. Sets SET LOCAL session_var| Node_RLS
+    Node_RLS -->|7. Enforces Row Isolation| Node_HTTP
 
-    %% Styling
-    style Node_TC fill:#f9f,stroke:#333,stroke-width:2px
-    style Node_PG fill:#f96,stroke:#333,stroke-width:2px
-    style Node_Fly fill:#bbf,stroke:#333,stroke-width:2px
+%% Styling
     style Node_SB fill:#ff9999,stroke:#333,stroke-width:2px
-    style Node_User fill:#99ff99,stroke:#333,stroke-width:2px
+    style Node_TC fill:#f9f,stroke:#333,stroke-width:2px
+    style Node_Fly fill:#f96,stroke:#333,stroke-width:2px
+    style Node_DS fill:#bbf,stroke:#333,stroke-width:2px
+    style Node_Ctx fill:#ffff99,stroke:#333,stroke-width:2px
+    style Node_Session fill:#99bbf,stroke:#333,stroke-width:2px
+    style Node_RLS fill:#99ff99,stroke:#333,stroke-width:2px
+    style Node_HTTP fill:#e1bbf7,stroke:#333,stroke-width:2px
 ```
+
+Validated:
+
+* isolated infrastructure
+* runtime permissions
+* tenant propagation
+* database filtering
+* HTTP integration
+* end-to-end tenant isolation
 
 Phase completed successfully.
