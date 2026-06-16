@@ -19,14 +19,27 @@ public class PatientService {
 
     @Transactional(readOnly = true)
     public List<PatientResponse> findAll() {
-        return repository.findAll();
+        return repository
+                .findAll()
+                .stream()
+                .map(
+                        patient -> new PatientResponse(
+                                patient.getId(),
+                                patient.getTenantId(),
+                                patient.getName()
+                        )).toList();
     }
 
     @Transactional
     public void create(CreatePatientRequest request) {
-        if (!StringUtils.hasText(TenantContext.getTenantId())){
+        if (!StringUtils.hasText(TenantContext.getTenantId())) {
             throw new IllegalStateException("Tenant not set");
         }
-        repository.create(request.name());
+
+        if (!StringUtils.hasText(request.name())) {
+            throw new IllegalStateException("Name not set");
+        }
+
+        repository.save(new Patient(request.name()));
     }
 }

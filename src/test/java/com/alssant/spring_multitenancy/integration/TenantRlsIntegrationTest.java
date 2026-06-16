@@ -168,7 +168,15 @@ class TenantRlsIntegrationTest extends BaseIntegrationTest {
                                 )
                 )
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(1));
+                .andExpect(jsonPath("$[*].name")
+                        .value(hasItem("Alice")))
+                .andExpect(jsonPath("$[*].tenantId")
+                        .value(
+                                everyItem(
+                                        equalTo(
+                                                tenantFixture.hospitalA()
+                                        )
+                                )));
 
         mockMvc.perform(
                         get("/database/patients")
