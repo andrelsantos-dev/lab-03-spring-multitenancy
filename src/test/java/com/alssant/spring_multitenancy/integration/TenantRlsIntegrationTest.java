@@ -4,18 +4,24 @@ import com.alssant.spring_multitenancy.api.dto.PatientResponse;
 import com.alssant.spring_multitenancy.support.BaseIntegrationTest;
 import com.alssant.spring_multitenancy.support.TenantFixture;
 import com.alssant.spring_multitenancy.tenant.TenantContext;
+import jakarta.servlet.ServletException;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.DataClassRowMapper;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
 import java.util.UUID;
 
+import static org.hamcrest.Matchers.*;
 import static org.junit.jupiter.api.Assertions.*;
+import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -38,31 +44,31 @@ class TenantRlsIntegrationTest extends BaseIntegrationTest {
                 String.class
         );
 
-        assertEquals(APP_USER,currentUser);
+        assertEquals(APP_USER, currentUser);
     }
 
     @Test
-    void shouldExposeTenantAsDatabaseSessionVariable(){
+    void shouldExposeTenantAsDatabaseSessionVariable() {
         String tenantId = UUID.randomUUID().toString();
         TenantContext.setTenantId(tenantId);
 
         String currentUser =
-        jdbcTemplate.queryForObject(
-                """
-                        SELECT current_setting(
-                            'app.current_tenant',
-                            true
-                        )
-                        """,
-                String.class
-        );
+                jdbcTemplate.queryForObject(
+                        """
+                                SELECT current_setting(
+                                    'app.current_tenant',
+                                    true
+                                )
+                                """,
+                        String.class
+                );
 
-        assertEquals(tenantId,currentUser);
+        assertEquals(tenantId, currentUser);
 
     }
 
     @Test
-    void shouldReturnOnlyPatientsFromHospitalA(){
+    void shouldReturnOnlyPatientsFromHospitalA() {
         String tenantId = tenantFixture.hospitalA();
         TenantContext.setTenantId(tenantId);
 
@@ -71,12 +77,12 @@ class TenantRlsIntegrationTest extends BaseIntegrationTest {
                 new DataClassRowMapper<>(PatientResponse.class)
         );
 
-        assertEquals(1,patients.size());
-        assertEquals("Alice",patients.getFirst().name());
+        assertEquals(1, patients.size());
+        assertEquals("Alice", patients.getFirst().name());
     }
 
     @Test
-    void shouldReturnOnlyPatientsFromHospitalB(){
+    void shouldReturnOnlyPatientsFromHospitalB() {
         String tenantId = tenantFixture.hospitalB();
         TenantContext.setTenantId(tenantId);
 
@@ -85,12 +91,12 @@ class TenantRlsIntegrationTest extends BaseIntegrationTest {
                 new DataClassRowMapper<>(PatientResponse.class)
         );
 
-        assertEquals(1,patients.size());
-        assertEquals("Bob",patients.getFirst().name());
+        assertEquals(1, patients.size());
+        assertEquals("Bob", patients.getFirst().name());
     }
 
     @Test
-    void shouldReturnEmptyWhenTenantHasNoPatients(){
+    void shouldReturnEmptyWhenTenantHasNoPatients() {
         String tenantId = UUID.randomUUID().toString();
         TenantContext.setTenantId(tenantId);
 
@@ -169,6 +175,101 @@ class TenantRlsIntegrationTest extends BaseIntegrationTest {
                 )
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.length()").value(0));
+
+    }
+
+    @Test
+    void shouldInsertPatientIntoCurrentTenant() throws Exception {
+
+        String hospitalA = tenantFixture.hospitalA();
+
+        mockMvc.perform(post("/database/patients")
+                        .header("X-Tenant-Id", hospitalA)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "name":
+                                  "Charlie"
+                                }
+                                """))
+                .andExpect(status().isCreated());
+
+        mockMvc
+                .perform(get("/database/patients")
+                        .header("X-Tenant-Id", hospitalA))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[*].name")
+                        .value(hasItem("Charlie")))
+                .andExpect(jsonPath("$[*].tenantId")
+                        .value(
+                                everyItem(
+                                        equalTo(
+                                                hospitalA
+                                        )
+                                )));
+
+    }
+
+    @Test
+    void shouldRejectInsertWithoutTenant() throws Exception {
+        ServletException exception = Assertions.assertThrows(ServletException.class, () -> {
+            mockMvc.perform(
+                    post("/database/patients")
+                            .contentType(APPLICATION_JSON)
+                            .content("""
+                                    {
+                                        "name":"Ghost"
+                                    }
+                                    """)
+            );
+        });
+
+
+        assertInstanceOf(
+
+                IllegalStateException.class,
+                exception.getCause()
+        );
+
+        assertTrue(
+                exception
+                        .getCause()
+                        .getMessage()
+                        .contains(
+                                "Tenant not set"
+                        )
+        );
+    }
+
+    @Test
+    void shouldNotReturnPatientFromAnotherTenant() throws Exception {
+        String hospitalA = tenantFixture.hospitalA();
+
+        mockMvc.perform(post("/database/patients")
+                        .header("X-Tenant-Id", hospitalA)
+                        .contentType(APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "name":
+                                  "Dave"
+                                }
+                                """))
+                .andExpect(status().isCreated());
+
+        String hospitalB = tenantFixture.hospitalB();
+        mockMvc
+                .perform(get("/database/patients")
+                        .header("X-Tenant-Id", hospitalB))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[*].name")
+                        .value(not(hasItem("Dave"))))
+                .andExpect(jsonPath("$[*].tenantId")
+                        .value(
+                                everyItem(
+                                        equalTo(
+                                                hospitalB
+                                        )
+                                )));
 
     }
 }

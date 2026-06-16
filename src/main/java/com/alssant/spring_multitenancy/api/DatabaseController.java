@@ -1,10 +1,12 @@
 package com.alssant.spring_multitenancy.api;
 
+import com.alssant.spring_multitenancy.api.dto.CreatePatientRequest;
 import com.alssant.spring_multitenancy.api.dto.PatientResponse;
 import com.alssant.spring_multitenancy.api.dto.TenantResponse;
 import com.alssant.spring_multitenancy.patient.PatientService;
 import com.alssant.spring_multitenancy.tenant.TenantContext;
 import org.springframework.dao.EmptyResultDataAccessException;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.DataClassRowMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -123,14 +125,14 @@ public class DatabaseController {
 
     @GetMapping("/tenants/{id}")
     public ResponseEntity<TenantResponse> getTenant(@PathVariable UUID id) {
-        try{
+        try {
             TenantResponse tenant = jdbcTemplate.queryForObject(
                     "SELECT id, name FROM tenants where id = ?",
                     new DataClassRowMapper<>(TenantResponse.class),
                     id
             );
             return ResponseEntity.ok(tenant);
-        }catch (EmptyResultDataAccessException ex){
+        } catch (EmptyResultDataAccessException ex) {
             return ResponseEntity
                     .notFound()
                     .build();
@@ -140,5 +142,15 @@ public class DatabaseController {
     @GetMapping("/patients")
     public ResponseEntity<List<PatientResponse>> getPatients() {
         return ResponseEntity.ok(patientService.findAll());
+    }
+
+    @PostMapping("patients")
+    public ResponseEntity<Void> createPatient(@RequestBody CreatePatientRequest request) {
+        patientService.create(request);
+
+        return ResponseEntity
+                .status(HttpStatus.CREATED)
+                .build();
+
     }
 }
